@@ -45,6 +45,12 @@ export interface Activity {
     title: string;
     description?: string;
   };
+  messageSent?: {
+    prompt: string;
+  };
+  messageReceived?: {
+    message: string;
+  };
   sessionCompleted?: Record<string, never>;
   artifacts?: Artifact[];
 }

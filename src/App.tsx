@@ -124,7 +124,7 @@ function App() {
             </div>
 
             {activeTab === 'sources' && <SourcesTab julesAPI={julesAPI} />}
-            {activeTab === 'sessions' && <SessionsTab julesAPI={julesAPI} />}
+            {activeTab === 'sessions' && <SessionsTab julesAPI={julesAPI} deepseekAPI={deepseekAPI} />}
             {activeTab === 'autofix' && <AutoFixTab julesAPI={julesAPI} deepseekAPI={deepseekAPI} />}
           </>
         )}

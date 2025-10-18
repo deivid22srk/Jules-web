@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, MessageSquare, Plus, Send, CheckCircle, ExternalLink } from 'lucide-react';
+import { RefreshCw, MessageSquare, Plus, Send, CheckCircle, ExternalLink, Upload, Sparkles } from 'lucide-react';
 import { JulesAPI } from '../services/jules';
+import { DeepSeekAPI } from '../services/deepseek';
 import type { Session, Activity, Source } from '../types/jules';
 
 interface SessionsTabProps {
   julesAPI: JulesAPI;
+  deepseekAPI: DeepSeekAPI | null;
 }
 
-function SessionsTab({ julesAPI }: SessionsTabProps) {
+function SessionsTab({ julesAPI, deepseekAPI }: SessionsTabProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
@@ -22,6 +24,11 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
   const [startingBranch, setStartingBranch] = useState('main');
   const [autoCreatePR, setAutoCreatePR] = useState(true);
   const [messagePrompt, setMessagePrompt] = useState('');
+  
+  const [showAutoFix, setShowAutoFix] = useState(false);
+  const [logContent, setLogContent] = useState('');
+  const [analysis, setAnalysis] = useState('');
+  const [analyzing, setAnalyzing] = useState(false);
 
   const loadSessions = async () => {
     setLoading(true);
@@ -93,14 +100,17 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
   const sendMessage = async () => {
     if (!selectedSession || !messagePrompt) return;
 
+    const currentMessage = messagePrompt;
     setLoading(true);
     setError('');
+    setMessagePrompt('');
+    
     try {
-      await julesAPI.sendMessage(selectedSession.id, messagePrompt);
-      setMessagePrompt('');
+      await julesAPI.sendMessage(selectedSession.id, currentMessage);
       setTimeout(() => loadActivities(selectedSession.id), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao enviar mensagem');
+      setMessagePrompt(currentMessage);
     } finally {
       setLoading(false);
     }
@@ -116,6 +126,65 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
       setTimeout(() => loadActivities(selectedSession.id), 1000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao aprovar plano');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      setLogContent(content);
+    };
+    reader.readAsText(file);
+  };
+
+  const analyzeWithDeepSeek = async () => {
+    if (!deepseekAPI) {
+      setError('Configure a API key do OpenRouter nas configurações');
+      return;
+    }
+
+    if (!logContent) {
+      setError('Nenhum log foi carregado');
+      return;
+    }
+
+    setAnalyzing(true);
+    setError('');
+    setAnalysis('');
+
+    try {
+      const result = await deepseekAPI.analyzeLogs(logContent);
+      setAnalysis(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao analisar logs');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const sendAnalysisToJules = async () => {
+    if (!selectedSession || !analysis) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      await julesAPI.sendMessage(
+        selectedSession.id,
+        `Por favor, corrija os seguintes problemas identificados nos logs:\n\n${analysis}`
+      );
+      setLogContent('');
+      setAnalysis('');
+      setShowAutoFix(false);
+      setTimeout(() => loadActivities(selectedSession.id), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao enviar análise');
     } finally {
       setLoading(false);
     }
@@ -140,7 +209,7 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
     return (
       <div className="content-panel">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <div>
+          <div style={{ flex: 1 }}>
             <button className="btn btn-secondary" onClick={() => setSelectedSession(null)}>
               ← Voltar
             </button>
@@ -149,9 +218,21 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
               {selectedSession.id}
             </p>
           </div>
-          <button className="btn btn-secondary" onClick={() => loadActivities(selectedSession.id)} disabled={loading}>
-            <RefreshCw size={16} />
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {deepseekAPI && (
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setShowAutoFix(!showAutoFix)}
+                style={{ background: showAutoFix ? '#1a3a1a' : undefined }}
+              >
+                <Sparkles size={16} />
+                Auto-Fix
+              </button>
+            )}
+            <button className="btn btn-secondary" onClick={() => loadActivities(selectedSession.id)} disabled={loading}>
+              <RefreshCw size={16} />
+            </button>
+          </div>
         </div>
 
         {selectedSession.outputs && selectedSession.outputs.length > 0 && (
@@ -177,6 +258,65 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
 
         {error && <div className="error">{error}</div>}
 
+        {showAutoFix && (
+          <div style={{ background: '#2a2a2a', padding: '1.5rem', borderRadius: '8px', marginBottom: '1rem' }}>
+            <h3 style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Sparkles size={20} />
+              Auto-Fix com DeepSeek
+            </h3>
+
+            <div className="file-input-area" style={{ marginBottom: '1rem' }}>
+              <input
+                type="file"
+                id={`log-file-${selectedSession.id}`}
+                accept=".log,.txt"
+                onChange={handleFileUpload}
+              />
+              <label htmlFor={`log-file-${selectedSession.id}`} style={{ cursor: 'pointer' }}>
+                <Upload size={24} style={{ marginBottom: '0.5rem', opacity: 0.7 }} />
+                <p style={{ fontSize: '0.9rem' }}>Clique para selecionar arquivo de log</p>
+              </label>
+            </div>
+
+            {logContent && (
+              <>
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ background: '#1e1e1e', padding: '0.75rem', borderRadius: '6px', maxHeight: '150px', overflow: 'auto' }}>
+                    <pre style={{ fontSize: '0.7rem', color: '#9aa0a6', margin: 0 }}>
+                      {logContent.substring(0, 300)}
+                      {logContent.length > 300 ? '...' : ''}
+                    </pre>
+                  </div>
+                </div>
+                <button
+                  className="btn"
+                  onClick={analyzeWithDeepSeek}
+                  disabled={analyzing}
+                  style={{ marginBottom: '1rem' }}
+                >
+                  <Sparkles size={16} />
+                  {analyzing ? 'Analisando...' : 'Analisar com DeepSeek'}
+                </button>
+              </>
+            )}
+
+            {analysis && (
+              <div style={{ marginTop: '1rem' }}>
+                <h4 style={{ marginBottom: '0.75rem', color: '#e8eaed' }}>📊 Análise</h4>
+                <div style={{ background: '#1e1e1e', padding: '1rem', borderRadius: '6px', marginBottom: '1rem' }}>
+                  <pre style={{ fontSize: '0.85rem', color: '#e8eaed', whiteSpace: 'pre-wrap', margin: 0 }}>
+                    {analysis}
+                  </pre>
+                </div>
+                <button className="btn" onClick={sendAnalysisToJules} disabled={loading}>
+                  <Send size={16} />
+                  Enviar para Jules Corrigir
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ marginBottom: '1rem' }}>
           <h3 style={{ marginBottom: '0.75rem' }}>Atividades</h3>
           {activities.length === 0 ? (
@@ -188,6 +328,20 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
                   <div className="activity-time">
                     {new Date(activity.createTime).toLocaleString('pt-BR')} • {activity.originator === 'agent' ? '🤖 Agent' : '👤 User'}
                   </div>
+
+                  {activity.messageSent && (
+                    <>
+                      <div className="activity-title">💬 Mensagem Enviada</div>
+                      <div className="activity-description">{activity.messageSent.prompt}</div>
+                    </>
+                  )}
+
+                  {activity.messageReceived && (
+                    <>
+                      <div className="activity-title">💬 Mensagem Recebida</div>
+                      <div className="activity-description">{activity.messageReceived.message}</div>
+                    </>
+                  )}
 
                   {activity.planGenerated && (
                     <>
@@ -229,7 +383,7 @@ function SessionsTab({ julesAPI }: SessionsTabProps) {
           )}
         </div>
 
-        <div style={{ background: '#2a2a2a', padding: '1rem', borderRadius: '8px' }}>
+        <div style={{ background: '#2a2a2a', padding: '1rem', borderRadius: '8px', position: 'sticky', bottom: 0 }}>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <input
               type="text"
